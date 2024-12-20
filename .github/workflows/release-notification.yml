@@ -1,0 +1,33 @@
+name: Notify on Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  slack-message:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Slack Message
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          curl -X POST \
+            -H 'Content-type: application/json' \
+            --data '{"text":"New release ${{ github.event.release.tag_name }} is out for automating-workflows repository, <${{ github.event.release.html_url }}|check it out now!>"}' \
+            "$SLACK_WEBHOOK"
+
+  failure-notification: # This job is used to send a slack notification to general channel if the previous job failed
+    name: Slack Notification
+    needs: slack-message
+    runs-on: ubuntu-latest
+    if: ${{ always() && needs.slack-message.result == 'failure'}}
+    steps:
+      - name: Slack Notification
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_COLOR: failure
+          SLACK_ICON: https://icon.icepanel.io/Technology/svg/GitHub-Actions.svg
+          SLACK_MESSAGE: 'Workflow ${{ github.workflow }} has failed. Please check the Actions tab for more details.'
+          SLACK_TITLE: 'Failed Workflow Notification'
