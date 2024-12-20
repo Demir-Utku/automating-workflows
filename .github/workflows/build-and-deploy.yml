@@ -1,0 +1,103 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+      - preprod
+      - release/*
+
+# This setting ensures that only one instance of the workflow runs per branch at a time. If a new workflow is triggered while another is still running,
+# the in-progress workflow will be canceled. This helps prevent conflicts and resource wastage.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  setup: # This job is used to set up the vars for the build job
+    runs-on: ubuntu-latest
+
+    # Define outputs that can be used by other jobs
+    outputs:
+      BUILD_MODE: ${{ steps.get_build_mode.outputs.BUILD_MODE }}
+      BUILD_TAG: ${{ steps.get_build_mode.outputs.BUILD_TAG }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get build mode from branch name
+        id: get_build_mode
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const getBuildMode = require('./.github/scripts/getBuildMode.cjs');
+
+            await getBuildMode({ github, context, core });
+
+  build-and-deploy: # This job is used to build the frontend image and push it to ECR (Elastic Container Registry)
+    runs-on: ubuntu-latest
+    needs: setup
+    environment:
+      name: ${{ needs.setup.outputs.BUILD_MODE }}
+      url: ${{ steps.deploy.outputs.service-url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: us-east-1
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          mask-password: 'false'
+
+      - name: Docker Meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          # Specify the ECR repository for the image
+          images: ${{ steps.login-ecr.outputs.registry }}/demir-utku/automating-workflows
+          tags: |
+            type=raw,value=${{ needs.setup.outputs.BUILD_TAG }}-${{ github.sha }}
+
+      # build the Docker image and push it to ECR. Kaniko is a tool to build container
+      # images from a Dockerfile, inside a container or Kubernetes cluster.
+      - name: Build and push
+        uses: int128/kaniko-action@v1
+        with:
+          context: ./
+          executor: gcr.io/kaniko-project/executor:v1.23.0
+          push: true
+          # Use tags from Docker Meta step
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            MODE=${{ needs.setup.outputs.BUILD_MODE }}
+
+      # Deploy the built image to AWS App Runner
+      - name: Deploy to App Runner
+        id: deploy
+        uses: awslabs/amazon-app-runner-deploy@main
+        with:
+          service: frontend-${{ needs.setup.outputs.BUILD_MODE }}
+          image: ${{ steps.login-ecr.outputs.registry }}/demir-utku/automating-workflows:${{ needs.setup.outputs.BUILD_TAG }}-${{ github.sha }}
+          # IAM role for App Runner service
+          access-role-arn: ${{ secrets.APPRUNNER_SERVICE_ROLE_ARN }}
+          region: us-east-1
+          cpu: 1
+          memory: 2
+          copy-env-vars: |
+            MODE
+            NODE_ENV
+        env:
+          MODE: ${{ needs.setup.outputs.BUILD_MODE }}
+          NODE_ENV: production
