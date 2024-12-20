@@ -1,0 +1,37 @@
+name: Bump Version
+
+on:
+  push:
+    branches:
+      - release/*
+
+# Prevents multiple workflow runs from executing simultaneously
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  version-bump:
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup node env
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          check-latest: true
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Bump versions
+        uses: changesets/action@v1
+        with:
+          commit: 'chore: bump versions'
+          title: 'chore: bump versions'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
