@@ -1,0 +1,12 @@
+deployments:
+  # This mapping is used in Jira to map deployments to environments properly
+  # Otherwise Jira will not be able to find the correct environment for a deployment like `preview-pr-123` would result in `Unmapped`
+  environmentMapping:
+    development:
+      - 'dev'
+    testing:
+      - 'preview-pr-*'
+    staging:
+      - 'preprod'
+    production:
+      - 'production'
