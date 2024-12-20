@@ -1,0 +1,168 @@
+# Responsible for linting, type checking, building, and deploying preview environments for pull requests
+name: Dev Workflow
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-check-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup node env
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          check-latest: true
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Lint commits
+        uses: wagoid/commitlint-github-action@v6
+
+      - name: Lint PR name
+        if: github.event_name == 'pull_request'
+        run: |
+          echo '${{ github.event.pull_request.title }}' | npx commitlint
+
+      - name: Lint code
+        run: npm run lint -- --quiet
+
+      - name: Check types
+        run: npm run typecheck
+
+      - name: Build App
+        run: npm run build -- --mode dev
+
+      - name: Upload Build Output
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-pr-${{ github.event.pull_request.number }}-${{ github.sha }}
+          path: ./dist
+
+  # Determine if preview deployment is needed
+  should-preview:
+    needs: lint-check-build
+    runs-on: ubuntu-latest
+    outputs:
+      OK: ${{ steps.check.outputs.OK }} # Output used by next job
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check PR
+        id: check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const shouldPreview = require('./.github/scripts/shouldPreview.cjs')
+            await shouldPreview({ github, context, core })
+
+  build-and-deploy-preview:
+    needs: should-preview
+    if: needs.should-preview.outputs.OK == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      # Creates a preview environment
+      name: preview-pr-${{ github.event.pull_request.number }}
+      url: https://${{ steps.deploy.outputs.service-url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup node env
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          check-latest: true
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Build App
+        if: github.event_name != 'pull_request'
+        run: npm run build -- --mode dev
+
+      - name: Download Build Output
+        if: github.event_name == 'pull_request'
+        uses: actions/download-artifact@v4
+        with:
+          name: build-pr-${{ github.event.pull_request.number }}-${{ github.sha }}
+          path: ./dist
+
+      # Configure AWS credentials for ECR access
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: us-east-1
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Login to AWS ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          mask-password: 'false'
+
+      - name: Docker Meta for frontend
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.login-ecr.outputs.registry }}/demir-utku/automating-workflows
+          tags: |
+            type=raw,value=preview-pr-${{ github.event.pull_request.number }}-${{ github.sha }}
+
+      - name: Build and push frontend
+        uses: int128/kaniko-action@v1
+        with:
+          push: true
+          executor: gcr.io/kaniko-project/executor:v1.23.0-debug
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          context: ./
+          build-args: |
+            MODE=dev
+
+      - name: Deploy to App Runner
+        id: deploy
+        uses: awslabs/amazon-app-runner-deploy@main
+        with:
+          service: frontend-preview-pr-${{ github.event.pull_request.number }}
+          image: ${{ steps.login-ecr.outputs.registry }}/demir-utku/automating-workflows:preview-pr-${{ github.event.pull_request.number }}-${{ github.sha }}
+          access-role-arn: ${{ secrets.APPRUNNER_SERVICE_ROLE_ARN }}
+          region: us-east-1
+          cpu: 1
+          memory: 2
+          copy-env-vars: |
+            MODE
+            NODE_ENV
+            PR_NUMBER
+        env:
+          MODE: dev
+          NODE_ENV: development
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+
+      - name: Comment PR with preview URL
+        uses: actions/github-script@v7
+        env:
+          PREVIEW_URL: '${{ steps.deploy.outputs.service-url }}'
+          JIRA_USER: '${{ secrets.JIRA_USER }}'
+          JIRA_PASSWORD: '${{ secrets.JIRA_PASSWORD }}'
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const commentPreviewURL = require('./.github/scripts/commentPreviewURL.cjs')
+            await commentPreviewURL({ github, context, core }, fetch)
