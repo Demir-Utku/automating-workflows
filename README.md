@@ -34,25 +34,12 @@ cd automating-workflows
 npm install
 ```
 
-## 🔄 Workflow Features
+3. Define repository secrets in your GitHub repository settings. You should have the following secrets:
 
-### GitHub Actions
-
-Our CI/CD pipeline automatically:
-- Runs tests on pull requests
-- Checks code formatting and linting
-- Builds and deploys on merge to main
-- Generates and updates changelogs
-
-### Changesets
-
-We use [Changesets](https://github.com/changesets/changesets) for version management:
-- Run `yarn changeset` to create a new changeset
-- Commit the generated .md file
-- Changesets bot will create a PR with version updates
-
-### Code Quality
-
-- ESLint for code linting
-- Prettier for code formatting
-- Conventional commits enforcement
+- `BOT_PAT`
+- `AWS_ACCESS_KEY_ID`
+- `AWS_SECRET_ACCESS_KEY`
+- `JIRA_USER`
+- `JIRA_PASSWORD`
+- `SLACK_WEBHOOK_URL`
+- `APPRUNNER_SERVICE_ROLE_ARN`
