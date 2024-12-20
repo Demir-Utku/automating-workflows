@@ -1,0 +1,27 @@
+name: PR Ready for Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ready-for-review:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Notify Jira
+        uses: actions/github-script@v7
+        env:
+          JIRA_USER: '${{ secrets.JIRA_USER }}'
+          JIRA_PASSWORD: '${{ secrets.JIRA_PASSWORD }}'
+        with:
+          script: |
+            const transitionToReview = require('./.github/scripts/transitionToReview.cjs')
+            await transitionToReview({ github, context, core }, fetch)
